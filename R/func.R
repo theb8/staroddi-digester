@@ -25,7 +25,8 @@ find_surface <- function(depth){
 
 # --------------------- -
 # find_tow
-# will find "tow events" of the instrument
+# will find tow events of the instrument
+# "hysteresis" approach to avoid ambiguous depth
 #
 # ENTER (m) : depth threshold to start a tow
 # EXIT (m) : depth threshold to end a tow
@@ -102,8 +103,99 @@ find_tow <- function(depth, datetime,
 }
 
 
-drift_check <- function(){
+# ----------------------- -
+# drift_check()
+# Try to find if the depth is drifting
+# looking at all "surface events" individually and compare the local zero found
+# Will inform the user if a drift has been found in the file
+#  
+# Note : If a signicant drift is found that would make things more complex to identify when the rig is actually fishing
+#
+# Note : a "surface event" is the moment between two fishing tow
+# when the rig is stand by (at the very surface of the water or on the deck).
+#
+# depth_raw : 
+# datetime :
+# time_id : 
+# returns : 
+# ----------------------- -
+drift_check <- function(depth_raw, datetime, tow_id){
   
+  # hard coded thresholds
+  TIME_TH_LO <-  30 # will discard 30 seconds after each previous tow (unit sec)
+  TIME_TH_UP <- 4*60 # will discard 5 minutes just before the next tow; since the gear is being moved around at the surface (unit sec)
+  DRIFT_TH <- 0.5 # hard threshold to determine if sensor is drifting (unit meters)
   
+  #find points between tows
+  surface_mask <- is.na(tow_id)
+  
+  # regroup in event and get the indice
+  r <- rle(surface_mask)
+  ends   <- cumsum(r$lengths)
+  starts <- ends - r$lengths + 1
+  keep <- r$values == T
+  surface_indices <- data.frame(start = starts[keep], end = ends[keep])
+  
+  # surface events found
+  n_groups <- dim(surface_indices)[1]
+  
+  # also compute the global zero to compare values
+  global_zero <- find_surface(depth_raw)
+  
+  #preallocate result
+  file_zeros <- rep(NA, n_groups)
+  file_spread  <- rep(NA, n_groups)
+  
+    
+  for(i in 1:n_groups){
+    
+    indice_lo <- surface_indices$start[i]
+    indice_up <- surface_indices$end[i]
+    
+    #trim 3 minutes on each side
+    start_time <- datetime[indice_lo]
+    end_time <- datetime[indice_up]
+    
+    start_time_th <- start_time+TIME_TH_LO
+    end_time_th <- end_time - TIME_TH_UP
+    
+    # flag
+    if(end_time_th<start_time_th){
+      stop("end time cannot be before start time.\n a tow must have beend misidentified.")
+    }
+    
+    #mask using timestamp
+    keep_time <- (datetime >= start_time_th) & (datetime <= end_time_th)
+    n_kept <- sum(keep_time) #number of points for this "surface event"
+    
+    # another flag
+    if(n_kept < 10){
+      warning("number of points is too low for this surface event\n drift check might not work properly")
+    }
+    
+    # the depth values that are kept
+    depth_window <- depth_raw[keep_time]
+    
+    # zero found for this surface event
+    local_zero <- median(depth_window)
+    
+    # store computed values
+    file_zeros[i] <- local_zero
+    file_spread[i] <- max(depth_window)-min(depth_window)
+    
+  }
+  
+  # check if a surface event is outside our depth threshold
+  zero_ok <- (file_zeros <= (global_zero + DRIFT_TH)) & (file_zeros >= (global_zero - DRIFT_TH))
+  
+  if(!all(zero_ok)){
+    warning_msg <- sprintf("some surface events are outside threshold of %s meters\n  please verify if the instrument is drifting", DRIFT_TH)
+    warning(warning_msg)
+  }
+  
+  list2return <- list(indices=surface_indices,
+                      local_zeros=file_zeros,
+                      local_spread=file_spread)
+  return(list2return)
   
 }
