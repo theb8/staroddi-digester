@@ -213,9 +213,18 @@ drift_check <- function(depth_raw, datetime, tow_id){
 # ----------------------- -
 average_x <- function(tow, x, main_table, time_th_lo=30, time_th_up=240){
   
+  accepted_vars <- c("Date.Time",
+                     "Temp..C.",
+                     "Depth.m.",
+                     "Salinity.psu.",
+                     "Conduct.mS.cm.",
+                     "Velocity.m.sec.",
+                     "depth_corr"
+                     )
+  
   # check arguments and flag error
   cols <- colnames(main_table)
-  if(!any(x == cols[2:7])){
+  if(!(x %in% accepted_vars)){
     error_msg <- sprintf("variable name is not valid")
     stop(error_msg)
   }
@@ -269,7 +278,7 @@ file_summary <- function(main_table){
   tow_unique <- unique(main_table$tow_id[!na_mask])
   n_tow <- length(tow_unique)
   
-  vars2output <- c("Temp..C.", "Depth.m.", "Salinity.psu.")
+  vars2output <- c("Temp..C.", "depth_corr", "Salinity.psu.")
   n_var <- length(vars2output)
   
   summary_df <- preallocate_summary_table(main_table$tow_id, vars2output)
@@ -315,7 +324,7 @@ file_details <- function(main_table){
   tow_unique <- unique(main_table$tow_id[!na_mask])
   n_tow <- length(tow_unique)
   
-  vars2output <- c("Temp..C.", "Depth.m.", "Salinity.psu.")
+  vars2output <- c("Temp..C.", "depth_corr", "Salinity.psu.")
   n_var <- length(vars2output)
   
   #preallocate a list to store all the data frames
@@ -376,10 +385,22 @@ preallocate_summary_table <- function(tow_id, vars2output){
 }
 
 
+# -------------------------------------- -
+# get_true_depth()
+# Keep only the "true_depth" rows of the sensor data.
+#
+#   sens_data : andes sensor data (data.frame)
+# returns: data.frame
+# --------------------------------------- -
+get_true_depth <- function(sens_data){
+  mask <- sens_data$type == "true_depth"
+  depth_data <- sens_data[mask,]
+}
 
 
-
-
+depth_validation <- function(){
+  
+}
 
 
 
