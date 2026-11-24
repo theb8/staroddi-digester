@@ -15,8 +15,7 @@
 source("R/func.R")
 
 enc<-"latin1"
-fname <- file.path("data/iml202619/2026-06-05.CSV")
-fname <- file.path("data/iml202619/2026-06-10.CSV")
+fname <- file.path("data/iml202619/2026-06-12.CSV")
 
 input_table <- read.csv(file = fname, header = T, sep = ";", fileEncoding = enc)
 
@@ -41,6 +40,13 @@ drift_report <- drift_check(depth_raw, datetime, tow_id)
 # a more complete data frame table
 main_table <- input_table
 main_table$tow_id <- tow_id
+main_table$depth_corr <- depth
 
 summary_df <- file_summary(main_table)
 details_df <- file_details(main_table)
+
+
+fname_sensors <- file.path("calib/IML2026019F_sensor_data.csv")
+data_sensors <- read.csv(fname_depthref, encoding = enc)
+depthref <- get_true_depth(data_sensors)
+
