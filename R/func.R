@@ -143,58 +143,66 @@ drift_check <- function(depth_raw, datetime, tow_id){
   global_zero <- find_surface(depth_raw)
   
   #preallocate result
-  file_zeros <- rep(NA, n_groups)
-  file_spread  <- rep(NA, n_groups)
-  
-  for(i in 1:n_groups){
-    
+  file_zeros <- rep(NA_real_, n_groups)
+  file_spread  <- rep(NA_real_, n_groups)
+
+  n <- length(depth_raw)
+  MIN_PTS <- 10 # min number of points for a surface event to be used
+
+  for(i in seq_len(n_groups)){
+
     indice_lo <- surface_indices$start[i]
     indice_up <- surface_indices$end[i]
-    
-    #trim 3 minutes on each side
+
     start_time <- datetime[indice_lo]
     end_time <- datetime[indice_up]
-    
-    start_time_th <- start_time+TIME_TH_LO
-    end_time_th <- end_time - TIME_TH_UP
-    
-    # flag
-    if(end_time_th<start_time_th){
-      stop("end time cannot be before start time.\n a tow must have beend misidentified.")
-    }
-    
-    #mask using timestamp
+
+    # only trim the sides that border a tow
+    # (the first/last surface event of the file has no tow before/after it)
+    start_time_th <- if(indice_lo > 1) start_time + TIME_TH_LO else start_time
+    end_time_th <- if(indice_up < n) end_time - TIME_TH_UP else end_time
+
+    #mask using timestamp (empty if the event is shorter than the trims)
     keep_time <- (datetime >= start_time_th) & (datetime <= end_time_th)
+    keep_time[is.na(keep_time)] <- FALSE
     n_kept <- sum(keep_time) #number of points for this "surface event"
-    
-    # another flag
-    if(n_kept < 10){
-      warning("number of points is too low for this surface event\n drift check might not work properly")
+
+    # too short : skip this surface event (left as NA)
+    if(n_kept < MIN_PTS){
+      next
     }
-    
+
     # the depth values that are kept
     depth_window <- depth_raw[keep_time]
-    
-    # zero found for this surface event
-    local_zero <- median(depth_window)
-    
-    # store computed values
-    file_zeros[i] <- local_zero
-    file_spread[i] <- max(depth_window)-min(depth_window)
-    
+
+    # store computed values (zero found for this surface event)
+    file_zeros[i] <- median(depth_window, na.rm = TRUE)
+    file_spread[i] <- diff(range(depth_window, na.rm = TRUE))
+
   }
-  
-  # check if a surface event is outside our depth threshold
-  zero_ok <- (file_zeros <= (global_zero + DRIFT_TH)) & (file_zeros >= (global_zero - DRIFT_TH))
-  
-  if(!all(zero_ok)){
+
+  # report skipped surface events
+  skipped <- is.na(file_zeros)
+  n_skipped <- sum(skipped)
+  if(n_groups == 0 || n_skipped == n_groups){
+    warning("no usable surface event found\n  drift could not be checked")
+  } else if(n_skipped > 0){
+    warning(sprintf("%d of %d surface events too short (< %d points after trimming) and skipped in drift check",
+                    n_skipped, n_groups, MIN_PTS))
+  }
+
+  # check if a surface event is outside our depth threshold (skipped events are ignored)
+  zero_ok <- abs(file_zeros - global_zero) <= DRIFT_TH
+
+  if(!all(zero_ok, na.rm = TRUE)){
     warning_msg <- sprintf("some surface events are outside threshold of %s meters\n  please verify if the instrument is drifting", DRIFT_TH)
     warning(warning_msg)
   }
-  
+
   list2return <- list(indices=surface_indices,
                       local_zeros=file_zeros,
-                      local_spread=file_spread)
+                      local_spread=file_spread,
+                      n_skipped=n_skipped)
   return(list2return)
   
 }
