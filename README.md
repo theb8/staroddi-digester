@@ -8,7 +8,7 @@ depth + timestamp series and segments it into **sets** (tows): the gear goes dow
 fishes, and comes back up to the ship. For each set it then computes summary values
 (start/end time, time on bottom, median temperature, depth and salinity).
 
-> Status: experimental / work in progress.
+Status: experimental / work in progress.
 
 ## Project layout
 
@@ -16,7 +16,7 @@ fishes, and comes back up to the ship. For each set it then computes summary val
 R/func.R     all the functions
 R/run.R      example script: read one daily file and run the full pipeline
 data/        logger files (not tracked by git), e.g. data/iml202619/2026-06-12.CSV
-calib/       reference data for depth validation (not tracked by git)
+calib/       reference data for depth validation (not tracked by git; todo)
 ```
 
 ## Input data
