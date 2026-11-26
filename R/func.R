@@ -60,7 +60,14 @@ find_tow <- function(depth, datetime,
   # keep the event only if it towd more than `enter`; which is 5 meters default.
   keep <- r$values & run_max > enter
   tow_indices <- data.frame(start = starts[keep], end = ends[keep])
- 
+
+  # no tow in this file (e.g. bad weather, day at port) : return an all-NA map
+  tow_id <- rep(NA_integer_, n)
+  if(nrow(tow_indices) == 0){
+    warning("no tow found in this file")
+    return(tow_id)
+  }
+
   # --- -
   # check 1 : time gap checkup
   # tow events were identified 
@@ -87,10 +94,13 @@ find_tow <- function(depth, datetime,
   tow_indices   <- tow_indices[dur >= min_dur,]
   
   n_tows <- dim(tow_indices)[1]
-  
-  tow_id <- rep(NA_integer_, n)
-                
-  for(i in 1:n_tows){
+
+  if(n_tows == 0){
+    warning("no tow found in this file (all candidate tows shorter than min_dur)")
+    return(tow_id)
+  }
+
+  for(i in seq_len(n_tows)){
     
     tow_id[tow_indices$start[i]:tow_indices$end[i]] <- i
     
@@ -304,7 +314,7 @@ file_summary <- function(main_table){
   
   summary_df <- preallocate_summary_table(main_table$tow_id, vars2output)
   
-  for(i in 1:n_tow){
+  for(i in seq_len(n_tow)){
     
     #subset tow
     mask <- main_table$tow_id == i
@@ -329,7 +339,7 @@ file_summary <- function(main_table){
     summary_df$bottom_end[i] <- bottom_end
     summary_df$bottom_dur[i] <- as.numeric(difftime(bottom_end, bottom_start, units = "mins"))
 
-    for(j in 1:n_var){
+    for(j in seq_len(n_var)){
       
       col_indice <- which(vars2output[j] == colnames(summary_df))
       
@@ -360,7 +370,7 @@ file_details <- function(main_table){
   #preallocate a list to store all the data frames
   detail_list <- vector(mode='list', length = n_tow)
   
-  for(i in 1:n_tow){
+  for(i in seq_len(n_tow)){
     
     #subset tow
     mask <- main_table$tow_id == i
@@ -409,8 +419,8 @@ preallocate_summary_table <- function(tow_id, vars2output){
                            bottom_dur=dummy_difftime)
   
   # add variables as cols
-  for(i in 1:n_var){
-    summary_df[[vars2output[i]]] <- NA
+  for(i in seq_len(n_var)){
+    summary_df[[vars2output[i]]] <- rep(NA_real_, n_tow)
   }  
   
   return(summary_df)
