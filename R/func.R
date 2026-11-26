@@ -33,7 +33,7 @@ find_surface <- function(depth){
 # MIN_GAP : min timegap to merge two tows (min)
 # MIN_DUR : minimum duration (min)
 # returns :
-# ---------------------
+# --------------------- -
 find_tow <- function(depth, datetime, 
                      enter=7, exit=1.5,
                      min_gap=2, min_dur=2){
@@ -68,7 +68,9 @@ find_tow <- function(depth, datetime,
   # --- -
   
   # compute time gap for all tow events
-  gap <- as.numeric(difftime(datetime[tow_indices$start[-1]], datetime[tow_indices$end[-nrow(tow_indices)]]))
+  gap <- as.numeric(
+    difftime(datetime[tow_indices$start[-1]], datetime[tow_indices$end[-nrow(tow_indices)]], units = "min")
+    )
   
   # create groups based on time difference
   time_group <- cumsum(c(TRUE, gap >= min_gap))
@@ -83,7 +85,10 @@ find_tow <- function(depth, datetime,
   # --- -
    
   # Drop: too short or too shallow
-  dur  <- as.numeric(difftime(datetime[tow_indices$end], datetime[tow_indices$start], units = "mins"))
+  dur  <- as.numeric(
+    difftime(datetime[tow_indices$end], datetime[tow_indices$start], units = "mins")
+    )
+  
   tow_indices   <- tow_indices[dur >= min_dur,]
   
   n_tows <- dim(tow_indices)[1]
