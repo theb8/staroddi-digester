@@ -29,6 +29,10 @@ for(i in col2makenum){
 datetime <- as.POSIXct(input_table$Date.Time, format="%d.%m.%Y %H:%M:%S")
 input_table$Date.Time <- datetime
 
+# drop rows with missing depth/datetime (see attr(input_table, "dropped_rows"))
+input_table <- clean_logger_data(input_table)
+datetime <- input_table$Date.Time
+
 depth_raw <- input_table$Depth.m.
 offset <- find_surface(depth_raw)
 depth <- depth_raw - offset

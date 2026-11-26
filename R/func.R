@@ -12,8 +12,38 @@ charcomma2numdecimal <- function(x){
 }
 
 
+# ----------------------- -
+# clean_logger_data()
+# drop rows with a missing depth or datetime (unreadable values become NA when parsing)
+# must be called after parsing (numeric depth, POSIXct datetime) and before find_surface()/find_tow()
+#
+# input_table : data frame of the file (Date.Time as POSIXct, Depth.m. as numeric)
+# returns : the same data frame without the bad rows
+#           the original row numbers of the dropped rows are in attr(x, "dropped_rows")
+# ----------------------- -
+clean_logger_data <- function(input_table){
+
+  bad <- is.na(input_table$Depth.m.) | is.na(input_table$Date.Time)
+  dropped_rows <- which(bad)
+
+  if(length(dropped_rows) > 0){
+    warning(sprintf("%d rows dropped (missing depth/datetime), see attr(x, \"dropped_rows\")",
+                    length(dropped_rows)))
+  }
+
+  clean_table <- input_table[!bad, ]
+  attr(clean_table, "dropped_rows") <- dropped_rows
+  return(clean_table)
+}
+
+
 # will return a depth value
 find_surface <- function(depth){
+
+  if(anyNA(depth)){
+    stop("depth contains NA, run clean_logger_data() first")
+  }
+
   # find surface
   surface_anchor <- quantile(depth, probs = 0.05) #5th percentile to
   surface_level <- 3
@@ -43,6 +73,11 @@ find_tow <- function(depth, datetime,
   if(length(datetime) != n){
     stop("depth and datetime must be the same length")
   }
+
+  # NA would silently split/truncate tows
+  if(anyNA(depth) || anyNA(datetime)){
+    stop("depth or datetime contains NA, run clean_logger_data() first")
+  }
   
   # identifity points just below the surface of the water (default is 1.5 meters)
   low <- depth >= exit
@@ -60,7 +95,14 @@ find_tow <- function(depth, datetime,
   # keep the event only if it towd more than `enter`; which is 5 meters default.
   keep <- r$values & run_max > enter
   tow_indices <- data.frame(start = starts[keep], end = ends[keep])
- 
+
+  # no tow in this file (e.g. bad weather, day at port) : return an all-NA map
+  tow_id <- rep(NA_integer_, n)
+  if(nrow(tow_indices) == 0){
+    warning("no tow found in this file")
+    return(tow_id)
+  }
+
   # --- -
   # check 1 : time gap checkup
   # tow events were identified 
@@ -92,10 +134,13 @@ find_tow <- function(depth, datetime,
   tow_indices   <- tow_indices[dur >= min_dur,]
   
   n_tows <- dim(tow_indices)[1]
-  
-  tow_id <- rep(NA_integer_, n)
-                
-  for(i in 1:n_tows){
+
+  if(n_tows == 0){
+    warning("no tow found in this file (all candidate tows shorter than min_dur)")
+    return(tow_id)
+  }
+
+  for(i in seq_len(n_tows)){
     
     tow_id[tow_indices$start[i]:tow_indices$end[i]] <- i
     
@@ -148,58 +193,66 @@ drift_check <- function(depth_raw, datetime, tow_id){
   global_zero <- find_surface(depth_raw)
   
   #preallocate result
-  file_zeros <- rep(NA, n_groups)
-  file_spread  <- rep(NA, n_groups)
-  
-  for(i in 1:n_groups){
-    
+  file_zeros <- rep(NA_real_, n_groups)
+  file_spread  <- rep(NA_real_, n_groups)
+
+  n <- length(depth_raw)
+  MIN_PTS <- 10 # min number of points for a surface event to be used
+
+  for(i in seq_len(n_groups)){
+
     indice_lo <- surface_indices$start[i]
     indice_up <- surface_indices$end[i]
-    
-    #trim 3 minutes on each side
+
     start_time <- datetime[indice_lo]
     end_time <- datetime[indice_up]
-    
-    start_time_th <- start_time+TIME_TH_LO
-    end_time_th <- end_time - TIME_TH_UP
-    
-    # flag
-    if(end_time_th<start_time_th){
-      stop("end time cannot be before start time.\n a tow must have beend misidentified.")
-    }
-    
-    #mask using timestamp
+
+    # only trim the sides that border a tow
+    # (the first/last surface event of the file has no tow before/after it)
+    start_time_th <- if(indice_lo > 1) start_time + TIME_TH_LO else start_time
+    end_time_th <- if(indice_up < n) end_time - TIME_TH_UP else end_time
+
+    #mask using timestamp (empty if the event is shorter than the trims)
     keep_time <- (datetime >= start_time_th) & (datetime <= end_time_th)
+    keep_time[is.na(keep_time)] <- FALSE
     n_kept <- sum(keep_time) #number of points for this "surface event"
-    
-    # another flag
-    if(n_kept < 10){
-      warning("number of points is too low for this surface event\n drift check might not work properly")
+
+    # too short : skip this surface event (left as NA)
+    if(n_kept < MIN_PTS){
+      next
     }
-    
+
     # the depth values that are kept
     depth_window <- depth_raw[keep_time]
-    
-    # zero found for this surface event
-    local_zero <- median(depth_window)
-    
-    # store computed values
-    file_zeros[i] <- local_zero
-    file_spread[i] <- max(depth_window)-min(depth_window)
-    
+
+    # store computed values (zero found for this surface event)
+    file_zeros[i] <- median(depth_window, na.rm = TRUE)
+    file_spread[i] <- diff(range(depth_window, na.rm = TRUE))
+
   }
-  
-  # check if a surface event is outside our depth threshold
-  zero_ok <- (file_zeros <= (global_zero + DRIFT_TH)) & (file_zeros >= (global_zero - DRIFT_TH))
-  
-  if(!all(zero_ok)){
+
+  # report skipped surface events
+  skipped <- is.na(file_zeros)
+  n_skipped <- sum(skipped)
+  if(n_groups == 0 || n_skipped == n_groups){
+    warning("no usable surface event found\n  drift could not be checked")
+  } else if(n_skipped > 0){
+    warning(sprintf("%d of %d surface events too short (< %d points after trimming) and skipped in drift check",
+                    n_skipped, n_groups, MIN_PTS))
+  }
+
+  # check if a surface event is outside our depth threshold (skipped events are ignored)
+  zero_ok <- abs(file_zeros - global_zero) <= DRIFT_TH
+
+  if(!all(zero_ok, na.rm = TRUE)){
     warning_msg <- sprintf("some surface events are outside threshold of %s meters\n  please verify if the instrument is drifting", DRIFT_TH)
     warning(warning_msg)
   }
-  
+
   list2return <- list(indices=surface_indices,
                       local_zeros=file_zeros,
-                      local_spread=file_spread)
+                      local_spread=file_spread,
+                      n_skipped=n_skipped)
   return(list2return)
   
 }
@@ -212,11 +265,10 @@ drift_check <- function(depth_raw, datetime, tow_id){
 # main_table : data frame of the file (formatted with date and proper numeric)
 # tow : tow number (sequential value starting at 1 )
 # x : target variable (i.e. date, temp, depth, sal, conduct, vel)
-# time_th_lo :  (sec)
-# time_th_up : (sec)
-# returns : 
+# band : depth band (m) below the bottom depth used to select on-bottom points (see bottom_mask)
+# returns : median of x over the on-bottom points of the tow
 # ----------------------- -
-average_x <- function(tow, x, main_table, time_th_lo=30, time_th_up=240){
+average_x <- function(tow, x, main_table, band=2){
   
   accepted_vars <- c("Date.Time",
                      "Temp..C.",
@@ -247,27 +299,41 @@ average_x <- function(tow, x, main_table, time_th_lo=30, time_th_up=240){
   mask <- main_table$tow_id == tow
   mask[is.na(mask)] <- F #set NA to False
   subset_table <- main_table[mask,]
-  n<- dim(subset_table)[1] # dimension of the 
-  
-  # cut the very start and end of the tow 
-  # the goal is to drop values when the instrument is being handled (going up/down or moving around at subsurface)
-  datetime<-subset_table$Date.Time
-  start_time <- datetime[1]
-  end_time <- datetime[n]
-  start_time_th <- start_time + time_th_lo
-  end_time_th <- end_time - time_th_up
-  
-  # flag
-  if(end_time_th<start_time_th){
-    stop("end time cannot be before start time.\n a tow must have beend misidentified.")
-  }
-  
 
-  keep_time <- (datetime >= start_time_th) & (datetime <= end_time_th)
-  
-  x_values <- subset_table[keep_time, col_indice]
-  avg <- median(x_values)
-  
+  # keep only the on-bottom part of the tow
+  # the goal is to drop values when the instrument is going up/down or moving around at subsurface
+  keep <- bottom_mask(subset_table$depth_corr, band = band)
+
+  x_values <- subset_table[keep, col_indice]
+  avg <- median(x_values, na.rm = TRUE)
+  return(avg)
+
+}
+
+
+# ----------------------- -
+# bottom_mask()
+# select the on-bottom points of a single tow, based on depth
+# (instead of trimming a fixed time at the start/end of the tow)
+#
+# depth : depth values of ONE tow (corrected depth, m)
+# band : points deeper than (bottom depth - band) are kept (m)
+# min_pts : if fewer points than this are kept, fall back to the whole tow (with a warning)
+# returns : logical vector, same length as depth
+# ----------------------- -
+bottom_mask <- function(depth, band=2, min_pts=5){
+
+  # robust "bottom depth" : 90th percentile rather than max (avoids spikes)
+  bottom <- quantile(depth, probs = 0.9, na.rm = TRUE)
+  mask <- depth >= (bottom - band)
+  mask[is.na(mask)] <- FALSE
+
+  if(sum(mask) < min_pts){
+    warning("few on-bottom points for this tow; using the whole tow")
+    mask <- !is.na(depth)
+  }
+
+  return(mask)
 }
 
 
@@ -288,7 +354,7 @@ file_summary <- function(main_table){
   
   summary_df <- preallocate_summary_table(main_table$tow_id, vars2output)
   
-  for(i in 1:n_tow){
+  for(i in seq_len(n_tow)){
     
     #subset tow
     mask <- main_table$tow_id == i
@@ -303,8 +369,17 @@ file_summary <- function(main_table){
     summary_df$datetime_start[i] <- start_time
     summary_df$datetime_end[i] <- end_time
     summary_df$dur[i] <- end_time - start_time
-    
-    for(j in 1:n_var){
+
+    # on-bottom part of the tow
+    on_bottom <- bottom_mask(subset_table$depth_corr)
+    bottom_times <- subset_table$Date.Time[on_bottom]
+    bottom_start <- min(bottom_times)
+    bottom_end <- max(bottom_times)
+    summary_df$bottom_start[i] <- bottom_start
+    summary_df$bottom_end[i] <- bottom_end
+    summary_df$bottom_dur[i] <- as.numeric(difftime(bottom_end, bottom_start, units = "mins"))
+
+    for(j in seq_len(n_var)){
       
       col_indice <- which(vars2output[j] == colnames(summary_df))
       
@@ -335,7 +410,7 @@ file_details <- function(main_table){
   #preallocate a list to store all the data frames
   detail_list <- vector(mode='list', length = n_tow)
   
-  for(i in 1:n_tow){
+  for(i in seq_len(n_tow)){
     
     #subset tow
     mask <- main_table$tow_id == i
@@ -378,11 +453,14 @@ preallocate_summary_table <- function(tow_id, vars2output){
   summary_df <- data.frame(set=tow_unique,
                            datetime_start=dummy_posix,
                            datetime_end=dummy_posix,
-                           dur=dummy_difftime)
+                           dur=dummy_difftime,
+                           bottom_start=dummy_posix,
+                           bottom_end=dummy_posix,
+                           bottom_dur=dummy_difftime)
   
   # add variables as cols
-  for(i in 1:n_var){
-    summary_df[[vars2output[i]]] <- NA
+  for(i in seq_len(n_var)){
+    summary_df[[vars2output[i]]] <- rep(NA_real_, n_tow)
   }  
   
   return(summary_df)
