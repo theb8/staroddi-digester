@@ -1,11 +1,24 @@
+# ======================================= -
+# func.R
+# functions to digest Star-Oddi logger data (continuous daily files)
+# mounted on a fishing rig (dredge or trawl) :
+# segment the depth/time series into tows (sets) and summarise each tow
 #
-#
-#
-#
-#
+# typical order (see R/run.R) :
+#   charcomma2numdecimal() -> clean_logger_data() -> find_surface() -> find_tow()
+#   -> drift_check() -> file_summary() / file_details()
+# ======================================= -
 
-# x is a char vector with a single comma
-# will not fail if x is numeric
+
+# ----------------------- -
+# charcomma2numdecimal()
+# convert numbers written with a decimal comma ("12,5") to numeric (12.5)
+# only the first comma is replaced; unreadable values become NA (with a warning from as.numeric)
+# will not fail if x is already numeric
+#
+# x : character (or numeric) vector
+# returns : numeric vector, same length as x
+# ----------------------- -
 charcomma2numdecimal <- function(x){
   x_dot <- sub(pattern = ",", replacement = ".", x = x)
   x_num <- as.numeric(x_dot)
@@ -37,7 +50,15 @@ clean_logger_data <- function(input_table){
 }
 
 
-# will return a depth value
+# ----------------------- -
+# find_surface()
+# estimate the depth reading of the sensor at the surface (its "zero")
+# = median of the shallowest points : those within 3 m of the 5th percentile of depth
+# used to correct the depth : depth_corr = depth - find_surface(depth)
+#
+# depth : raw depth values of the whole file (m), no NA
+# returns : single numeric value, the surface level (m)
+# ----------------------- -
 find_surface <- function(depth){
 
   if(anyNA(depth)){
@@ -54,15 +75,21 @@ find_surface <- function(depth){
 }
 
 # --------------------- -
-# find_tow
-# will find tow events of the instrument
-# "hysteresis" approach to avoid ambiguous depth
+# find_tow()
+# find the tow events (sets) of the instrument
+# "hysteresis" approach to avoid ambiguous depth near the surface :
+#   1. a candidate tow is a run of points deeper than `exit` that reaches deeper than `enter`
+#   2. candidates separated by less than `min_gap` are merged into one tow
+#   3. tows shorter than `min_dur` are dropped
+# a file without any tow returns an all-NA vector (with a warning)
 #
-# ENTER (m) : depth threshold to start a tow
-# EXIT (m) : depth threshold to end a tow
-# MIN_GAP : min timegap to merge two tows (min)
-# MIN_DUR : minimum duration (min)
-# returns :
+# depth : corrected depth (m, relative to the surface), no NA
+# datetime : POSIXct timestamps, same length as depth, no NA
+# enter (m) : depth a tow must reach
+# exit (m) : depth threshold to end a tow
+# min_gap (min) : min time gap between two tows; closer tows are merged
+# min_dur (min) : minimum duration of a tow
+# returns : integer vector, same length as depth : tow number (1, 2, ...) or NA between tows
 # --------------------- -
 find_tow <- function(depth, datetime, 
                      enter=7, exit=1.5,
@@ -92,7 +119,7 @@ find_tow <- function(depth, datetime,
   run_id  <- rep(seq_along(r$lengths), r$lengths)
   run_max <- tapply(depth, run_id, max)
   
-  # keep the event only if it towd more than `enter`; which is 5 meters default.
+  # keep the event only if it went deeper than `enter` (7 meters default)
   keep <- r$values & run_max > enter
   tow_indices <- data.frame(start = starts[keep], end = ends[keep])
 
@@ -164,16 +191,23 @@ find_tow <- function(depth, datetime,
 # Note : a "surface event" is the moment between two fishing tow
 # when the rig is stand by (at the very surface of the water or on the deck).
 #
-# depth_raw : 
-# datetime :
-# time_id : 
-# returns : 
+# the 30 s after and 4 min before each tow are ignored (gear handled at the surface);
+# surface events too short to use (< 10 points left) are skipped (NA) with a warning
+#
+# depth_raw : raw depth values (m, NOT corrected), no NA
+# datetime : POSIXct timestamps, same length as depth_raw
+# tow_id : output of find_tow(), same length as depth_raw
+# returns : list with
+#   indices : data frame (start, end) of the row indices of each surface event
+#   local_zeros : median depth of each surface event (NA if skipped)
+#   local_spread : max - min depth of each surface event (NA if skipped)
+#   n_skipped : number of surface events skipped
 # ----------------------- -
 drift_check <- function(depth_raw, datetime, tow_id){
   
   # hard coded thresholds
   TIME_TH_LO <-  30 # will discard 30 seconds after each previous tow (unit sec)
-  TIME_TH_UP <- 4*60 # will discard 5 minutes just before the next tow; since the gear is being moved around at the surface (unit sec)
+  TIME_TH_UP <- 4*60 # will discard 4 minutes just before the next tow; since the gear is being moved around at the surface (unit sec)
   DRIFT_TH <- 0.8 # hard threshold to determine if sensor is drifting (unit meters)
   
   #find points between tows
@@ -259,12 +293,14 @@ drift_check <- function(depth_raw, datetime, tow_id){
 
 # ----------------------- -
 # average_x()
-# compute average (median) value of variable x
+# compute the average (median) value of variable x for one tow,
+# using only the on-bottom points of the tow (see bottom_mask())
 #
-# x :
-# main_table : data frame of the file (formatted with date and proper numeric)
-# tow : tow number (sequential value starting at 1 )
-# x : target variable (i.e. date, temp, depth, sal, conduct, vel)
+# tow : tow number (sequential value starting at 1)
+# x : name of the target column, one of : "Date.Time", "Temp..C.", "Depth.m.", "Salinity.psu.",
+#     "Conduct.mS.cm.", "Velocity.m.sec.", "depth_corr"
+# main_table : data frame of the file (formatted with date and proper numeric),
+#              with the tow_id and depth_corr columns
 # band : depth band (m) below the bottom depth used to select on-bottom points (see bottom_mask)
 # returns : median of x over the on-bottom points of the tow
 # ----------------------- -
@@ -340,8 +376,17 @@ bottom_mask <- function(depth, band=2, min_pts=5){
 
 
 # ------------------ -
+# file_summary()
+# build the summary table of a file : one row per tow
 #
-#
+# main_table : data frame of the file (formatted with date and proper numeric),
+#              with the tow_id and depth_corr columns
+# returns : data frame, one row per tow, with columns
+#   set : tow number
+#   datetime_start, datetime_end, dur : start/end time and duration of the whole tow
+#   bottom_start, bottom_end, bottom_dur : start/end time and duration on the bottom (min)
+#   Temp..C., depth_corr, Salinity.psu. : median value on the bottom (see average_x())
+#   (0 rows if the file has no tow)
 # ------------------ -
 file_summary <- function(main_table){
 
@@ -394,9 +439,11 @@ file_summary <- function(main_table){
 
 
 # --------------- -
+# file_details()
+# split the file into one data frame per tow (all points of the tow, all columns)
 #
-#
-#
+# main_table : data frame of the file, with the tow_id column
+# returns : list of data frames, element i = tow i (empty list if the file has no tow)
 # --------------- -
 file_details <- function(main_table){
   
@@ -427,6 +474,16 @@ file_details <- function(main_table){
 }
 
 
+# --------------- -
+# preallocate_summary_table()
+# create the empty (NA-filled) summary table used by file_summary()
+# times are in the hard-coded "America/Toronto" time zone
+#
+# tow_id : output of find_tow() (tow number or NA for each point)
+# vars2output : names of the variable columns to add (numeric, NA)
+# returns : data frame, one row per tow : set, datetime_start, datetime_end, dur,
+#           bottom_start, bottom_end, bottom_dur, then one column per vars2output
+# --------------- -
 preallocate_summary_table <- function(tow_id, vars2output){
   
   na_mask <- is.na(tow_id)
@@ -468,19 +525,25 @@ preallocate_summary_table <- function(tow_id, vars2output){
 }
 
 
-# -------------------------------------- -
+# ----------------------- -
 # get_true_depth()
-# Keep only the "true_depth" rows of the sensor data.
+# keep only the "true_depth" rows of the ANDES sensor data
+# (reference depth, to validate the logger depth)
 #
-#   sens_data : andes sensor data (data.frame)
-# returns: data.frame
-# --------------------------------------- -
+# sens_data : ANDES sensor data (data frame with a `type` column)
+# returns : data frame, the "true_depth" rows of sens_data
+# ----------------------- -
 get_true_depth <- function(sens_data){
   mask <- sens_data$type == "true_depth"
   depth_data <- sens_data[mask,]
 }
 
 
+# ----------------------- -
+# depth_validation()
+# (!) not written yet
+# goal : compare the logger depth with the reference depth from ANDES (get_true_depth())
+# ----------------------- -
 depth_validation <- function(){
   
 }
