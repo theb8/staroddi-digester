@@ -12,8 +12,38 @@ charcomma2numdecimal <- function(x){
 }
 
 
+# ----------------------- -
+# clean_logger_data()
+# drop rows with a missing depth or datetime (unreadable values become NA when parsing)
+# must be called after parsing (numeric depth, POSIXct datetime) and before find_surface()/find_tow()
+#
+# input_table : data frame of the file (Date.Time as POSIXct, Depth.m. as numeric)
+# returns : the same data frame without the bad rows
+#           the original row numbers of the dropped rows are in attr(x, "dropped_rows")
+# ----------------------- -
+clean_logger_data <- function(input_table){
+
+  bad <- is.na(input_table$Depth.m.) | is.na(input_table$Date.Time)
+  dropped_rows <- which(bad)
+
+  if(length(dropped_rows) > 0){
+    warning(sprintf("%d rows dropped (missing depth/datetime), see attr(x, \"dropped_rows\")",
+                    length(dropped_rows)))
+  }
+
+  clean_table <- input_table[!bad, ]
+  attr(clean_table, "dropped_rows") <- dropped_rows
+  return(clean_table)
+}
+
+
 # will return a depth value
 find_surface <- function(depth){
+
+  if(anyNA(depth)){
+    stop("depth contains NA, run clean_logger_data() first")
+  }
+
   # find surface
   surface_anchor <- quantile(depth, probs = 0.05) #5th percentile to
   surface_level <- 3
@@ -42,6 +72,11 @@ find_tow <- function(depth, datetime,
   
   if(length(datetime) != n){
     stop("depth and datetime must be the same length")
+  }
+
+  # NA would silently split/truncate tows
+  if(anyNA(depth) || anyNA(datetime)){
+    stop("depth or datetime contains NA, run clean_logger_data() first")
   }
   
   # identifity points just below the surface of the water (default is 1.5 meters)
