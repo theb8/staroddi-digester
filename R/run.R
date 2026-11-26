@@ -45,8 +45,8 @@ main_table$depth_corr <- depth
 summary_df <- file_summary(main_table)
 details_df <- file_details(main_table)
 
-
-fname_sensors <- file.path("calib/IML2026019F_sensor_data.csv")
-data_sensors <- read.csv(fname_depthref, encoding = enc)
-depthref <- get_true_depth(data_sensors)
+# WIP ---- -
+#fname_sensors <- file.path("calib/IML2026019F_sensor_data.csv")
+#data_sensors <- read.csv(fname_depthref, encoding = enc)
+#depthref <- get_true_depth(data_sensors)
 
